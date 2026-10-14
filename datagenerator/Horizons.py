@@ -388,6 +388,8 @@ class RandomHorizonStack(Horizons):
             print("onlap_layer_list = ", onlap_layer_list)
         onlap_array_dim = int(500 / 1250 * self.cfg.cube_shape[2])
         self.onlaps = np.zeros(onlap_array_dim, "int")
+        # Small cubes (depth << 1250) give onlap_array_dim < 200: drop out-of-range layers
+        onlap_layer_list = onlap_layer_list[onlap_layer_list < onlap_array_dim]
         self.onlaps[onlap_layer_list] = 1
 
         if not self.cfg.include_channels:
@@ -728,6 +730,8 @@ class Onlaps(Horizons):
             print("onlap_layer_list = ", onlap_layer_list)
         onlap_array_dim = int(500 / 1250 * self.cfg.cube_shape[2])
         self.onlaps = np.zeros(onlap_array_dim, "int")
+        # max_layers can exceed onlap_array_dim on small cubes; clip to avoid IndexError
+        onlap_layer_list = np.clip(onlap_layer_list, 0, onlap_array_dim - 1)
         self.onlaps[onlap_layer_list] = 1
 
         if self.cfg.verbose:
@@ -750,6 +754,8 @@ class Onlaps(Horizons):
         onlaps_horizon_list = []
         layer_has_onlaps = np.zeros((self.depth_maps.shape[2]), "bool")
         for i in range(self.depth_maps.shape[2] - 2, 0, -1):
+            if i >= len(self.onlaps):
+                continue
             if self.onlaps[i] == 1:
                 # A tilting (onlap) episode occurs for this horizon.
                 # Add a random dipping layer to this and all shallower layers, and adjust depth for layer thickness

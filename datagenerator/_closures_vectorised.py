@@ -191,3 +191,50 @@ def bbox_for_label_and_fault(
         for mn, mx, sh in zip(mins, maxs, shape)
     )
     return slices
+
+
+def stamp_closure_slab(
+    closure_segments: np.ndarray,
+    voxel_change_count: np.ndarray,
+    top_structure_depth_map: np.ndarray,
+    closure_depth_map: np.ndarray,
+    max_closure: int,
+) -> bool:
+    """Increment every voxel between a layer top and its closure (spill) depth.
+
+    Vectorised replacement for the ``for k in range(max_closure + 1)`` loop in
+    ``Closures.create_closure_labels_from_depth_maps`` and
+    ``create_closure_labels_from_all_depth_maps``. Both arrays are updated in
+    place; ``np.add.at`` keeps the loop's accumulation where clipped slices
+    land on the same voxel. A k-slice that overruns ``voxel_change_count`` is
+    skipped for that array only, as the loop's ``except IndexError`` did.
+
+    Returns True if any voxel was stamped (the loop's
+    ``slices_with_substitution > 0``).
+    """
+    n_k = max_closure + 1
+    if n_k <= 0:
+        return False
+    if np.issubdtype(top_structure_depth_map.dtype, np.floating):
+        ks = np.arange(n_k).astype(top_structure_depth_map.dtype)
+    else:
+        ks = np.arange(n_k)
+    horizon_slice = (top_structure_depth_map[:, :, None] + ks).clip(
+        0, closure_segments.shape[2] - 2
+    )
+    valid = horizon_slice < closure_depth_map.astype("int")[:, :, None]
+    il, jl, kl = np.nonzero(valid)
+    if il.size == 0:
+        return False
+    zi = (horizon_slice[il, jl, kl] + 1).astype("int")
+    np.add.at(closure_segments, (il, jl, zi), 1.0)
+
+    vcc = voxel_change_count.shape
+    oob = (il >= vcc[0]) | (jl >= vcc[1]) | (zi >= vcc[2])
+    if oob.any():
+        bad_k = np.zeros(n_k, dtype=bool)
+        bad_k[kl[oob]] = True
+        keep = ~bad_k[kl]
+        il, jl, zi = il[keep], jl[keep], zi[keep]
+    np.add.at(voxel_change_count, (il, jl, zi), 1)
+    return True

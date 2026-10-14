@@ -7,6 +7,7 @@ from datagenerator._closures_vectorised import (
     closure_size_filter_sizes,
     relabel_consecutive,
     parse_closure_codes_vectorised,
+    stamp_closure_slab,
 )
 from numpy.random import default_rng
 # skimage imports are deferred to Closures.__init__ (OPT-3) so that a bare
@@ -206,7 +207,6 @@ class Closures(Horizons, Geomodel):
         closure_segments = np.zeros(self.faults.faulted_lithology.shape, "float32")
 
         # create grids with grid indices
-        ii, jj = self.build_meshgrid()
 
         # loop through horizons in 'depth_maps'
         voxel_change_count = np.zeros(self.cfg.cube_shape, dtype=np.uint8)
@@ -339,49 +339,14 @@ class Closures(Horizons, Geomodel):
                                 f" closure map min, max: {closure_map_min}, {closure_map_max}"
                             )
 
-                        slices_with_substitution = 0
                         print("    ... max_closure: {}".format(max_closure))
-                        for k in range(
-                            max_closure + 1
-                        ):  # add one more sample than seemingly needed for round-off
-                            # Subtract 2 from the closure cube shape since adding one later
-                            horizon_slice = (k + top_structure_depth_map).clip(
-                                0, closure_segments.shape[2] - 2
-                            )
-                            sublayer_kk = horizon_slice[
-                                horizon_slice < closure_depth_map.astype("int")
-                            ]
-                            sublayer_ii = ii[
-                                horizon_slice < closure_depth_map.astype("int")
-                            ]
-                            sublayer_jj = jj[
-                                horizon_slice < closure_depth_map.astype("int")
-                            ]
-
-                            if sublayer_ii.size > 0:
-                                slices_with_substitution += 1
-
-                                i_indices = sublayer_ii
-                                j_indices = sublayer_jj
-                                k_indices = sublayer_kk + 1
-
-                                try:
-                                    closure_segments[
-                                        i_indices, j_indices, k_indices.astype("int")
-                                    ] += 1.0
-                                    voxel_change_count[
-                                        i_indices, j_indices, k_indices.astype("int")
-                                    ] += 1
-                                except IndexError:
-                                    print("\nIndex is out of bounds.")
-                                    print(f"\tclosure_segments: {closure_segments}")
-                                    print(f"\tvoxel_change_count: {voxel_change_count}")
-                                    print(f"\ti_indices: {i_indices}")
-                                    print(f"\tj_indices: {j_indices}")
-                                    print(f"\tk_indices: {k_indices.astype('int')}")
-                                    pass
-
-                        if slices_with_substitution > 0:
+                        if stamp_closure_slab(
+                            closure_segments,
+                            voxel_change_count,
+                            top_structure_depth_map,
+                            closure_depth_map,
+                            max_closure,
+                        ):
                             layers_with_closure += 1
 
                         if self.cfg.verbose:
@@ -535,7 +500,6 @@ class Closures(Horizons, Geomodel):
         closure_segments = np.zeros(self.faults.faulted_lithology.shape, "float32")
 
         # create grids with grid indices
-        ii, jj = self.build_meshgrid()
 
         # loop through horizons in 'depth_maps'
         voxel_change_count = np.zeros(self.cfg.cube_shape, dtype=np.uint8)
@@ -654,49 +618,14 @@ class Closures(Horizons, Geomodel):
                             f" closure map min, max: {closure_map_min}, {closure_map_max}"
                         )
 
-                    slices_with_substitution = 0
                     print("    ... max_closure: {}".format(max_closure))
-                    for k in range(
-                        max_closure + 1
-                    ):  # add one more sample than seemingly needed for round-off
-                        # Subtract 2 from the closure cube shape since adding one later
-                        horizon_slice = (k + top_structure_depth_map).clip(
-                            0, closure_segments.shape[2] - 2
-                        )
-                        sublayer_kk = horizon_slice[
-                            horizon_slice < closure_depth_map.astype("int")
-                        ]
-                        sublayer_ii = ii[
-                            horizon_slice < closure_depth_map.astype("int")
-                        ]
-                        sublayer_jj = jj[
-                            horizon_slice < closure_depth_map.astype("int")
-                        ]
-
-                        if sublayer_ii.size > 0:
-                            slices_with_substitution += 1
-
-                            i_indices = sublayer_ii
-                            j_indices = sublayer_jj
-                            k_indices = sublayer_kk + 1
-
-                            try:
-                                closure_segments[
-                                    i_indices, j_indices, k_indices.astype("int")
-                                ] += 1.0
-                                voxel_change_count[
-                                    i_indices, j_indices, k_indices.astype("int")
-                                ] += 1
-                            except IndexError:
-                                print("\nIndex is out of bounds.")
-                                print(f"\tclosure_segments: {closure_segments}")
-                                print(f"\tvoxel_change_count: {voxel_change_count}")
-                                print(f"\ti_indices: {i_indices}")
-                                print(f"\tj_indices: {j_indices}")
-                                print(f"\tk_indices: {k_indices.astype('int')}")
-                                pass
-
-                    if slices_with_substitution > 0:
+                    if stamp_closure_slab(
+                        closure_segments,
+                        voxel_change_count,
+                        top_structure_depth_map,
+                        closure_depth_map,
+                        max_closure,
+                    ):
                         layers_with_closure += 1
 
                     if self.cfg.verbose:
@@ -1904,7 +1833,8 @@ class Closures(Horizons, Geomodel):
         for i in range(1, max_labels + 1):  # start at 1 to avoid counting 0's
             trap = np.where(labelled_array == i)
             ranges = [([np.min(trap[x]), np.max(trap[x])]) for x, _ in enumerate(trap)]
-            sizes = [x[1] - x[0] for x in ranges]
+            # int(): NumPy 2 reprs np.int64 as "np.int64(n)" inside str(list)
+            sizes = [int(x[1] - x[0]) for x in ranges]
             n_voxels = labelled_array[labelled_array == i].size
             if sum(sizes) > 0:
                 msg += (
