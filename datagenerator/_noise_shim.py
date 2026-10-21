@@ -18,6 +18,9 @@ except ImportError as exc:
         "Install opensimplex>=0.4.5.1 to use the noise shim."
     ) from exc
 
+# opensimplex.seed() rebuilds its permutation table, so only reseed when base changes
+_current_seed = None
+
 
 def pnoise2(
     x: float,
@@ -30,7 +33,10 @@ def pnoise2(
     base: int = 0,
 ) -> float:
     """Fractal Brownian Motion via opensimplex2."""
-    _osx.seed(base)
+    global _current_seed
+    if base != _current_seed:
+        _osx.seed(base)
+        _current_seed = base
     value = 0.0
     amplitude = 1.0
     frequency = 1.0

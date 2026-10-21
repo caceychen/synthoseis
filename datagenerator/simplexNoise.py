@@ -2,7 +2,10 @@ import os
 
 import numpy as np
 
-import noise
+try:
+    import noise
+except ModuleNotFoundError:
+    from datagenerator import _noise_shim as noise
 
 
 def noise_3d(cube_shape, verbose=False):

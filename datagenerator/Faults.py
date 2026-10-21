@@ -5,6 +5,10 @@ from scipy.ndimage import maximum_filter, binary_dilation
 from datagenerator.Horizons import Horizons
 from datagenerator.Geomodels import Geomodel
 from datagenerator.Parameters import Parameters
+from datagenerator._faults_vectorised import (
+    fill_layer_partial_voxels,
+    fill_layer_whole_voxels,
+)
 # plot_3D_faults_plot and skimage.measure are deferred to first use (OPT-3):
 # importing them here would trigger heavy C-extension loads at process start.
 from numpy.random import default_rng
@@ -295,10 +299,6 @@ class Faults(Horizons, Geomodel):
         # final dimension's shape is based on number of possible list types
         # currently  one of ['seawater', 'shale', 'sand']
         # n_lith = len(['shale', 'sand'])
-        cube_shape = self.faulted_age_volume.shape
-        # randomised_depth = np.zeros(cube_shape, 'float32')
-
-        ii, jj = self.build_meshgrid()
 
         # Loop over layers in reverse order, start at base
         previous_depth_map = self.faulted_depth_maps[:, :, -1]
@@ -343,118 +343,36 @@ class Faults(Horizons, Geomodel):
             if facies[i] == 1.0:  # if sand layer, make non-zero N/G map for layer
                 ng_map = self.create_random_net_over_gross_map()
 
-            for k in range(thickness_map_max + 1):
-                if self.cfg.partial_voxels:
-                    # compute fraction of voxel containing layer
-                    top_map = np.max(
-                        np.dstack(
-                            (current_depth_map, top_map_index.astype("float32") + k)
-                        ),
-                        axis=-1,
-                    )
-                    top_map = np.min(np.dstack((top_map, previous_depth_map)), axis=-1)
-                    base_map = np.min(
-                        np.dstack(
-                            (
-                                previous_depth_map,
-                                top_map_index.astype("float32") + k + 1,
-                            )
-                        ),
-                        axis=-1,
-                    )
-                    fraction_of_voxel = np.clip(base_map - top_map, 0.0, 1.0)
-                    valid_k = np.where(
-                        (fraction_of_voxel > 0.0)
-                        & ((top_map_index + k).astype("int") < cube_shape[2]),
-                        1,
-                        0,
-                    )
-
-                    # put layer properties in the cube for each case
-                    sublayer_ii = ii[valid_k == 1]
-                    sublayer_jj = jj[valid_k == 1]
-                else:
-                    sublayer_ii = ii[thickness_map > k]
-                    sublayer_jj = jj[thickness_map > k]
-
-                if sublayer_ii.shape[0] > 0:
-                    if self.cfg.partial_voxels:
-                        sublayer_depth_map = (top_map_index + k).astype("int")[
-                            valid_k == 1
-                        ]
-                        sublayer_depth_map_int = np.clip(sublayer_depth_map, 0, None)
-                        sublayer_ng_map = ng_map[valid_k == 1]
-                        sublayer_tvdml_map = tvdml_map[valid_k == 1]
-                        sublayer_fraction = fraction_of_voxel[valid_k == 1]
-
-                        # Lithology cube
-                        input_cube = work_cube_lith[
-                            sublayer_ii, sublayer_jj, sublayer_depth_map_int
-                        ]
-                        values = facies[i] * sublayer_fraction
-                        input_cube[input_cube == -1.0] = (
-                            values[input_cube == -1.0] * 1.0
-                        )
-                        input_cube[input_cube != -1.0] += values[input_cube != -1.0]
-                        work_cube_lith[
-                            sublayer_ii, sublayer_jj, sublayer_depth_map_int
-                        ] = input_cube * 1.0
-                        del input_cube
-                        del values
-
-                        input_cube = work_cube_sealed[
-                            sublayer_ii, sublayer_jj, sublayer_depth_map_int
-                        ]
-                        values = (1 - facies[i - 1]) * sublayer_fraction
-                        input_cube[input_cube == -1.0] = (
-                            values[input_cube == -1.0] * 1.0
-                        )
-                        input_cube[input_cube != -1.0] += values[input_cube != -1.0]
-                        work_cube_sealed[
-                            sublayer_ii, sublayer_jj, sublayer_depth_map_int
-                        ] = input_cube * 1.0
-                        del input_cube
-                        del values
-
-                        # Depth cube
-                        work_cube_depth[
-                            sublayer_ii, sublayer_jj, sublayer_depth_map_int
-                        ] += sublayer_tvdml_map * sublayer_fraction
-                        # Net to Gross cube
-                        work_cube_net_to_gross[
-                            sublayer_ii, sublayer_jj, sublayer_depth_map_int
-                        ] += sublayer_ng_map * sublayer_fraction
-
-                        # Randomised Depth Cube
-                        # randomised_depth[sublayer_ii, sublayer_jj, sublayer_depth_map_int] += \
-                        #     (sublayer_tvdml_map + random_z_perturbation) * sublayer_fraction
-
-                    else:
-                        sublayer_depth_map_int = (
-                            0.5
-                            + np.clip(
-                                previous_depth_map[thickness_map > k],
-                                0,
-                                self.vols.geologic_age.shape[2] - 1,
-                            )
-                        ).astype("int") - k
-                        sublayer_tvdml_map = tvdml_map[thickness_map > k]
-                        sublayer_ng_map = ng_map[thickness_map > k]
-
-                        work_cube_lith[
-                            sublayer_ii, sublayer_jj, sublayer_depth_map_int
-                        ] = facies[i]
-                        work_cube_sealed[
-                            sublayer_ii, sublayer_jj, sublayer_depth_map_int
-                        ] = 1 - facies[i - 1]
-
-                        work_cube_depth[
-                            sublayer_ii, sublayer_jj, sublayer_depth_map_int
-                        ] = sublayer_tvdml_map
-                        work_cube_net_to_gross[
-                            sublayer_ii, sublayer_jj, sublayer_depth_map_int
-                        ] += sublayer_ng_map
-                        # randomised_depth[sublayer_ii, sublayer_jj, sublayer_depth_map_int] += (sublayer_tvdml_map + random_z_perturbation)
+            if self.cfg.partial_voxels:
+                fill_layer_partial_voxels(
+                    work_cube_lith,
+                    work_cube_sealed,
+                    work_cube_depth,
+                    work_cube_net_to_gross,
+                    current_depth_map,
+                    previous_depth_map,
+                    top_map_index,
+                    thickness_map_max,
+                    tvdml_map,
+                    ng_map,
+                    facies[i],
+                    facies[i - 1],
+                )
+            else:
+                fill_layer_whole_voxels(
+                    work_cube_lith,
+                    work_cube_sealed,
+                    work_cube_depth,
+                    work_cube_net_to_gross,
+                    previous_depth_map,
+                    thickness_map,
+                    thickness_map_max,
+                    self.vols.geologic_age.shape[2] - 1,
+                    tvdml_map,
+                    ng_map,
+                    facies[i],
+                    facies[i - 1],
+                )
 
             # replace previous depth map for next iteration
             previous_depth_map = current_depth_map.copy()
@@ -1001,7 +919,12 @@ class Faults(Horizons, Geomodel):
             fault_plane_map = fault_plane_map.clip(0, ellipsoid.shape[2] - 1)
 
             # compute fault azimuth (relative to i,j,k indices, not North)
-            dx, dy = np.gradient(fault_plane_map)
+            # np.gradient raises on axes with fewer than 2 samples
+            if all(s > 1 for s in fault_plane_map.shape):
+                dx, dy = np.gradient(fault_plane_map)
+            else:
+                dx = np.zeros_like(fault_plane_map)
+                dy = np.zeros_like(fault_plane_map)
             strike_angle = np.arctan2(dy, dx) * 180.0 / np.pi  # 2D
             del dx
             del dy
@@ -1575,7 +1498,9 @@ class Faults(Horizons, Geomodel):
                         np.arange(faulted_geologic_age.shape[-1]).astype("float"),
                     )
                 else:
-                    faulted_depth_maps[i, j, :] = unfaulted_geologic_age[i, j, :]
+                    # Flat age trace: keep horizon indices. The age trace has the cube's
+                    # depth length, not n_horizons, so copying it raised a shape ValueError.
+                    faulted_depth_maps[i, j, :] = origtime
         # Waterbottom horizon has been set to 0. Re-insert this from the original depth_maps array
         if np.count_nonzero(faulted_depth_maps[:, :, 0]) == 0:
             faulted_depth_maps[:, :, 0] = self.faulted_depth_maps[:, :, 0] * 1.0
